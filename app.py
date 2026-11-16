@@ -247,6 +247,126 @@ def _article_parameters_table(parameters: ArticleParameters = ARTICLE) -> pd.Dat
     ).round(4)
 
 
+def _process_diagram(
+    result: SimulationResult,
+    setpoints: Iterable[float],
+    *,
+    sensor_max_cm: float = 39.0,
+) -> go.Figure:
+    """Draw a process-flow view of the three flotation tanks and pumps."""
+
+    setpoint_array = _as_three(setpoints)
+    tank_centers = (1.7, 4.8, 7.9)
+    tank_width = 1.65
+    tank_bottom = 0.15
+    tank_top = 3.35
+    liquid_height = tank_top - tank_bottom
+    final_levels = result.levels_cm[-1]
+    final_flows = result.flows_lpm[-1]
+    final_inlets = result.disturbances_lpm[-1]
+
+    fig = go.Figure()
+
+    # Pipes and arrows are drawn first so the tanks and pumps remain legible.
+    fig.add_shape(
+        type="line", x0=0.05, y0=2.65, x1=tank_centers[0] - tank_width / 2, y1=2.65,
+        line=dict(color="#94A3B8", width=7),
+    )
+    fig.add_annotation(
+        x=tank_centers[0] - tank_width / 2, y=2.65, ax=0.1, ay=2.65,
+        xref="x", yref="y", axref="x", ayref="y", showarrow=True,
+        arrowhead=2, arrowsize=1.2, arrowwidth=2, arrowcolor="#00A6A6",
+    )
+    fig.add_annotation(x=0.35, y=2.95, text="Alimentación Qd", showarrow=False, font=dict(size=12))
+
+    for pipe_index, (left_center, right_center, flow) in enumerate(
+        zip(tank_centers[:-1], tank_centers[1:], final_flows[:-1]), start=1
+    ):
+        y_pipe = 0.95
+        x_start = left_center + tank_width / 2
+        x_end = right_center - tank_width / 2
+        fig.add_shape(
+            type="line", x0=x_start, y0=y_pipe, x1=x_end, y1=y_pipe,
+            line=dict(color="#94A3B8", width=7),
+        )
+        fig.add_annotation(
+            x=x_end - 0.08, y=y_pipe, ax=x_start + 0.08, ay=y_pipe,
+            xref="x", yref="y", axref="x", ayref="y", showarrow=True,
+            arrowhead=2, arrowsize=1.2, arrowwidth=2, arrowcolor="#F59E0B",
+        )
+        fig.add_annotation(
+            x=(x_start + x_end) / 2, y=y_pipe + 0.28,
+            text=f"Q{pipe_index} = {flow:.1f} L/min",
+            showarrow=False, font=dict(size=11, color="#64748B"),
+        )
+
+    # Final-cell tailings outlet.
+    final_outlet_start = tank_centers[-1] + tank_width / 2
+    fig.add_shape(
+        type="line", x0=final_outlet_start, y0=0.95, x1=9.35, y1=0.95,
+        line=dict(color="#94A3B8", width=7),
+    )
+    fig.add_annotation(
+        x=9.35, y=0.95, ax=final_outlet_start + 0.05, ay=0.95,
+        xref="x", yref="y", axref="x", ayref="y", showarrow=True,
+        arrowhead=2, arrowsize=1.2, arrowwidth=2, arrowcolor="#7C3AED",
+    )
+    fig.add_annotation(x=8.9, y=1.28, text=f"Salida = {final_flows[2]:.1f} L/min", showarrow=False, font=dict(size=11, color="#64748B"))
+
+    for i, (center, name) in enumerate(zip(tank_centers, CELL_NAMES)):
+        level_fraction = float(np.clip(final_levels[i] / sensor_max_cm, 0.0, 1.0))
+        level_top = tank_bottom + liquid_height * level_fraction
+        left = center - tank_width / 2
+        right = center + tank_width / 2
+
+        # Liquid and tank shell.
+        fig.add_shape(
+            type="rect", x0=left + 0.08, x1=right - 0.08, y0=tank_bottom,
+            y1=max(tank_bottom + 0.02, level_top),
+            line=dict(width=0), fillcolor=CELL_COLORS[i], opacity=0.55,
+        )
+        fig.add_shape(
+            type="rect", x0=left, x1=right, y0=tank_bottom, y1=tank_top,
+            line=dict(color="#64748B", width=2), fillcolor="rgba(148,163,184,0.08)",
+        )
+        fig.add_shape(
+            type="line", x0=left + 0.08, x1=right - 0.08, y0=level_top, y1=level_top,
+            line=dict(color=CELL_COLORS[i], width=2),
+        )
+
+        # Peristaltic pump under each tank.
+        pump_y0, pump_y1 = -0.85, -0.35
+        fig.add_shape(
+            type="rect", x0=center - 0.52, x1=center + 0.52, y0=pump_y0, y1=pump_y1,
+            line=dict(color="#475569", width=1.5), fillcolor="rgba(71,85,105,0.22)",
+        )
+        fig.add_shape(
+            type="circle", x0=center - 0.16, x1=center + 0.16, y0=pump_y0 + 0.09, y1=pump_y1 - 0.09,
+            line=dict(color="#00A6A6", width=2), fillcolor="rgba(0,166,166,0.25)",
+        )
+        fig.add_shape(
+            type="line", x0=center, x1=center, y0=tank_bottom, y1=pump_y1,
+            line=dict(color="#94A3B8", width=3, dash="dot"),
+        )
+
+        fig.add_annotation(x=center, y=3.65, text=f"<b>{name}</b>", showarrow=False, font=dict(size=13))
+        fig.add_annotation(x=center, y=level_top + 0.22, text=f"{final_levels[i]:.2f} cm", showarrow=False, font=dict(size=12, color=CELL_COLORS[i]))
+        fig.add_annotation(x=center, y=-1.12, text=f"Bomba P{i + 1}<br>{final_flows[i]:.1f} L/min", showarrow=False, font=dict(size=10, color="#64748B"))
+        fig.add_annotation(x=center, y=3.12, text=f"Entrada: {final_inlets[i]:.1f} L/min", showarrow=False, font=dict(size=10, color="#64748B"))
+        fig.add_annotation(x=right - 0.06, y=0.32, text=f"SP {setpoint_array[i]:.1f}", showarrow=False, xanchor="right", font=dict(size=10, color="#64748B"))
+
+    fig.update_layout(
+        height=370,
+        margin=dict(l=10, r=10, t=30, b=12),
+        xaxis=dict(range=[-0.1, 9.55], visible=False, fixedrange=True),
+        yaxis=dict(range=[-1.35, 4.05], visible=False, fixedrange=True),
+        showlegend=False,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
+
+
 def main() -> None:
     st.markdown(
         """
@@ -346,6 +466,13 @@ def main() -> None:
     tab_simulation, tab_results, tab_model = st.tabs(["Simulación", "Resultados y datos", "Modelo del artículo"])
 
     with tab_simulation:
+        st.subheader("Vista del proceso")
+        st.caption("Estado instantáneo al final del ensayo: tanques, niveles, bombas peristálticas y caudales.")
+        st.plotly_chart(
+            _process_diagram(with_ff, setpoints),
+            use_container_width=True,
+            config={"displaylogo": False, "modeBarButtonsToRemove": ["select2d", "lasso2d"]},
+        )
         st.subheader("Respuesta de nivel")
         st.caption("Líneas continuas: PI + feedforward · líneas discontinuas: PI solamente · puntos: setpoints")
 
