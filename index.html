@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+  <title>Control de Nivel en Batería de Flotación · SCADA Digital Twin</title>
+  <meta name="description" content="Simulación interactiva SCADA del control de nivel en una batería de flotación con 3 celdas, bombas peristálticas, retardos de transporte y compensación feedforward." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22><text y=%2226%22 font-size=%2226%22>⚗️</text></svg>">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.2/build/stlite.css" />
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #0e1117;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    #loading-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+      color: #f8fafc;
+      z-index: 999999;
+      transition: opacity 0.5s ease;
+    }
+    .spinner {
+      width: 52px;
+      height: 52px;
+      border: 4px solid rgba(56, 189, 248, 0.2);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .loading-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #38bdf8;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .loading-desc {
+      font-size: 0.92rem;
+      color: #94a3b8;
+      text-align: center;
+      max-width: 480px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading-container">
+    <div class="spinner"></div>
+    <div class="loading-title">⚗️ Cargando Gemelo Digital SCADA...</div>
+    <div class="loading-desc">Iniciando motor de simulación WebAssembly (stlite + Pyodide). Cargando librerías científicas...</div>
+  </div>
+
+  <div id="root"></div>
+
+  <script type="module">
+    import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.2/build/stlite.js";
+    
+    // Smooth transition when Streamlit mounts
+    const observer = new MutationObserver((mutations, obs) => {
+      const root = document.getElementById("root");
+      if (root && root.querySelector(".stApp")) {
+        const loader = document.getElementById("loading-container");
+        if (loader) {
+          loader.style.opacity = "0";
+          setTimeout(() => loader.remove(), 500);
+        }
+        obs.disconnect();
+      }
+    });
+    observer.observe(document.getElementById("root"), { childList: true, subtree: true });
+
+    mount(
+      {
+        entrypoint: "app.py",
+        files: {
+          "app.py": {
+            url: "./app.py",
+          },
+        },
+        requirements: ["numpy>=1.26", "pandas>=2.0", "plotly>=5.20"],
+      },
+      document.getElementById("root")
+    );
+  </script>
+</body>
+</html>
