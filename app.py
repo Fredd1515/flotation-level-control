@@ -220,26 +220,84 @@ def _metrics_table(result: SimulationResult, label: str) -> pd.DataFrame:
     )
 
 
+def _results_dataframe(result: SimulationResult, setpoints: Iterable[float]) -> pd.DataFrame:
+    """Flatten the simulation arrays into a teacher-friendly CSV table."""
+
+    setpoint_array = _as_three(setpoints)
+    data: Dict[str, np.ndarray] = {"Tiempo (s)": result.time_s}
+    for i, name in enumerate(CELL_NAMES):
+        data[f"{name} - Setpoint (cm)"] = np.full(result.time_s.shape, setpoint_array[i])
+        data[f"{name} - Nivel (cm)"] = result.levels_cm[:, i]
+        data[f"{name} - Caudal de cola (L/min)"] = result.flows_lpm[:, i]
+        data[f"{name} - Perturbación (L/min)"] = result.disturbances_lpm[:, i]
+        data[f"{name} - Error (cm)"] = result.errors_cm[:, i]
+    return pd.DataFrame(data).round(6)
+
+
+def _article_parameters_table(parameters: ArticleParameters = ARTICLE) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Celda": CELL_NAMES,
+            "k' (cm·s⁻¹)/(L/min)": parameters.k_integrating,
+            "Retardo θ (s)": parameters.delay_s,
+            "Kc (L/min)/cm": parameters.kc,
+            "Ti (s)": parameters.ti_s,
+            "Kff": parameters.kff,
+        }
+    ).round(4)
+
+
 def main() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {max-width: 1450px; padding-top: 2rem; padding-bottom: 2rem;}
+        [data-testid="stMetricValue"] {font-size: 1.55rem;}
+        .app-kicker {color: #00a6a6; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: .78rem;}
+        .app-subtitle {color: #718096; font-size: 1.02rem; margin-top: -.45rem;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div class='app-kicker'>Laboratorio de control de procesos</div>", unsafe_allow_html=True)
     st.title("Control de nivel en una batería de flotación")
-    st.caption(
-        "Simulación Python del caso de Quintanilla et al. (MethodsX, 2023): "
-        "tres celdas en serie, proceso integrador, retardos y PI + feedforward."
+    st.markdown(
+        "<div class='app-subtitle'>Simulación interactiva del artículo de Quintanilla et al. "
+        "con tres celdas en serie, retardos, PI y feedforward.</div>",
+        unsafe_allow_html=True,
     )
 
     with st.sidebar:
-        st.header("Parámetros de la simulación")
-        duration = st.number_input("Duración (s)", min_value=60.0, max_value=3600.0, value=900.0, step=60.0)
-        dt = st.select_slider("Paso de integración (s)", options=[0.5, 1.0, 2.0, 5.0], value=1.0)
-        nominal_flow = st.number_input("Caudal nominal de entrada (L/min)", min_value=1.0, max_value=100.0, value=45.0, step=1.0)
-        disturbance_start = st.number_input("Inicio de perturbación (s)", min_value=0.0, max_value=float(duration), value=min(300.0, float(duration) / 3.0), step=10.0)
-        disturbance_step = st.number_input("Cambio de caudal (L/min)", min_value=-40.0, max_value=40.0, value=10.0, step=1.0)
+        st.header("Escenario de simulación")
+        duration = st.number_input(
+            "Duración (s)", min_value=60.0, max_value=3600.0, value=900.0, step=60.0,
+            help="Tiempo total del experimento virtual.",
+        )
+        dt = st.select_slider(
+            "Paso de integración (s)", options=[0.5, 1.0, 2.0, 5.0], value=1.0,
+            help="Un paso menor produce una curva más fina, pero requiere más cálculos.",
+        )
+        nominal_flow = st.number_input(
+            "Caudal nominal de entrada (L/min)", min_value=1.0, max_value=100.0, value=45.0, step=1.0,
+            help="Punto de operación alrededor del cual actúa el controlador.",
+        )
+        disturbance_start = st.number_input(
+            "Inicio de perturbación (s)", min_value=0.0, max_value=float(duration),
+            value=min(300.0, float(duration) / 3.0), step=10.0,
+        )
+        disturbance_step = st.number_input(
+            "Cambio de caudal (L/min)", min_value=-40.0, max_value=40.0, value=10.0, step=1.0,
+            help="Perturbación escalón aplicada a la alimentación de la celda 1.",
+        )
         st.divider()
         st.subheader("Setpoints de nivel")
         sp1 = st.number_input("Celda 1 (cm)", min_value=0.0, max_value=39.0, value=20.0, step=1.0)
         sp2 = st.number_input("Celda 2 (cm)", min_value=0.0, max_value=39.0, value=20.0, step=1.0)
         sp3 = st.number_input("Celda 3 (cm)", min_value=0.0, max_value=39.0, value=20.0, step=1.0)
-        compare = st.checkbox("Comparar feedback vs. feedback-feedforward", value=True)
+        compare = st.checkbox("Comparar PI vs. PI + feedforward", value=True)
+        st.divider()
+        st.caption("Rango del sensor del artículo: 0–39 cm")
 
     setpoints = (sp1, sp2, sp3)
     initial_levels = setpoints
@@ -264,96 +322,135 @@ def main() -> None:
         use_feedforward=False,
     )
 
+    if disturbance_start >= duration:
+        st.warning("La perturbación comienza al final del ensayo; no habrá respuesta a un escalón visible.")
+
     st.info(
         "La perturbación se aplica al caudal de alimentación de la celda 1. "
         "El caudal de salida de cada celda alimenta a la siguiente. "
         "Los niveles se limitan al rango del sensor del artículo: 0–39 cm."
     )
 
-    level_series: Dict[str, np.ndarray] = {}
-    for i, name in enumerate(CELL_NAMES):
-        level_series[f"{name} · PI + FF"] = with_ff.levels_cm[:, i]
-        if compare:
-            level_series[f"{name} · PI"] = feedback_only.levels_cm[:, i]
+    improvement = 100.0 * (1.0 - with_ff.iae_cm_s / np.maximum(feedback_only.iae_cm_s, 1e-12))
+    total_iae = float(np.sum(with_ff.iae_cm_s))
+    final_error = float(np.max(np.abs(with_ff.errors_cm[-1])))
+    peak_error = float(np.max(np.abs(with_ff.errors_cm)))
+    average_improvement = float(np.mean(improvement))
 
-    fig_levels = go.Figure()
-    for index, name in enumerate(CELL_NAMES):
-        fig_levels.add_trace(
-            go.Scatter(
-                x=with_ff.time_s,
-                y=with_ff.levels_cm[:, index],
-                mode="lines",
-                name=f"{name} · PI + FF",
-                line=dict(color=CELL_COLORS[index], width=2),
-            )
-        )
-        if compare:
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("IAE total · PI + FF", f"{total_iae:.2f} cm·s")
+    summary_cols[1].metric("Error final máximo", f"{final_error:.3f} cm")
+    summary_cols[2].metric("Desviación máxima", f"{peak_error:.3f} cm")
+    summary_cols[3].metric("Mejora media del IAE", f"{average_improvement:.1f}%" if compare else "—")
+
+    tab_simulation, tab_results, tab_model = st.tabs(["Simulación", "Resultados y datos", "Modelo del artículo"])
+
+    with tab_simulation:
+        st.subheader("Respuesta de nivel")
+        st.caption("Líneas continuas: PI + feedforward · líneas discontinuas: PI solamente · puntos: setpoints")
+
+        fig_levels = go.Figure()
+        for index, name in enumerate(CELL_NAMES):
             fig_levels.add_trace(
                 go.Scatter(
-                    x=feedback_only.time_s,
-                    y=feedback_only.levels_cm[:, index],
+                    x=with_ff.time_s,
+                    y=with_ff.levels_cm[:, index],
                     mode="lines",
-                    name=f"{name} · PI",
-                    line=dict(color=CELL_COLORS[index], width=1.5, dash="dash"),
+                    name=f"{name} · PI + FF",
+                    line=dict(color=CELL_COLORS[index], width=2.5),
+                    hovertemplate=f"{name} · PI + FF: %{{y:.2f}} cm<extra></extra>",
                 )
             )
-        fig_levels.add_hline(y=setpoints[index], line_color=CELL_COLORS[index], line_width=1, line_dash="dot")
-    fig_levels.update_layout(
-        title="Respuesta de nivel",
-        xaxis_title="Tiempo (s)",
-        yaxis_title="Nivel de pulpa (cm)",
-        yaxis=dict(range=[0, 39]),
-        hovermode="x unified",
-        height=480,
-        margin=dict(l=20, r=20, t=55, b=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
-    st.plotly_chart(fig_levels, use_container_width=True)
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.plotly_chart(
-            _line_chart(
-                with_ff.time_s,
-                {name: with_ff.flows_lpm[:, i] for i, name in enumerate(CELL_NAMES)},
-                y_title="Caudal de cola (L/min)",
-                title="Acciones de control · PI + FF",
-            ),
-            use_container_width=True,
+            if compare:
+                fig_levels.add_trace(
+                    go.Scatter(
+                        x=feedback_only.time_s,
+                        y=feedback_only.levels_cm[:, index],
+                        mode="lines",
+                        name=f"{name} · PI",
+                        line=dict(color=CELL_COLORS[index], width=1.5, dash="dash"),
+                        hovertemplate=f"{name} · PI: %{{y:.2f}} cm<extra></extra>",
+                    )
+                )
+            fig_levels.add_trace(
+                go.Scatter(
+                    x=with_ff.time_s,
+                    y=np.full(with_ff.time_s.shape, setpoints[index]),
+                    mode="lines",
+                    name=f"Setpoint · {name}",
+                    line=dict(color=CELL_COLORS[index], width=1, dash="dot"),
+                    hovertemplate=f"Setpoint · {name}: %{{y:.2f}} cm<extra></extra>",
+                    showlegend=False,
+                )
+            )
+        fig_levels.update_layout(
+            xaxis_title="Tiempo (s)",
+            yaxis_title="Nivel de pulpa (cm)",
+            yaxis=dict(range=[0, 39]),
+            hovermode="x unified",
+            height=500,
+            margin=dict(l=20, r=20, t=30, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         )
-    with col_b:
-        st.plotly_chart(
-            _line_chart(
-                with_ff.time_s,
-                {name: with_ff.disturbances_lpm[:, i] for i, name in enumerate(CELL_NAMES)},
-                y_title="Caudal de entrada (L/min)",
-                title="Perturbaciones medidas",
-            ),
-            use_container_width=True,
+        st.plotly_chart(fig_levels, use_container_width=True, config={"displaylogo": False})
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.plotly_chart(
+                _line_chart(
+                    with_ff.time_s,
+                    {name: with_ff.flows_lpm[:, i] for i, name in enumerate(CELL_NAMES)},
+                    y_title="Caudal de cola (L/min)",
+                    title="Acciones de control · PI + FF",
+                ),
+                use_container_width=True,
+                config={"displaylogo": False},
+            )
+        with col_b:
+            st.plotly_chart(
+                _line_chart(
+                    with_ff.time_s,
+                    {name: with_ff.disturbances_lpm[:, i] for i, name in enumerate(CELL_NAMES)},
+                    y_title="Caudal de entrada (L/min)",
+                    title="Perturbaciones medidas",
+                ),
+                use_container_width=True,
+                config={"displaylogo": False},
+            )
+
+    with tab_results:
+        st.subheader("Indicadores de desempeño")
+        metric_tables = [_metrics_table(with_ff, "PI + feedforward")]
+        if compare:
+            metric_tables.append(_metrics_table(feedback_only, "PI solamente"))
+        metrics = pd.concat(metric_tables, ignore_index=True)
+        st.dataframe(metrics, use_container_width=True, hide_index=True)
+
+        if compare:
+            st.success(
+                "Reducción estimada del IAE con feedforward: "
+                + ", ".join(f"{CELL_NAMES[i]} {improvement[i]:.1f}%" for i in range(3))
+            )
+
+        csv_data = _results_dataframe(with_ff, setpoints).to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Descargar resultados PI + feedforward (CSV)",
+            data=csv_data,
+            file_name="simulacion_control_flotacion.csv",
+            mime="text/csv",
+            type="primary",
         )
+        st.caption("El CSV contiene tiempo, setpoints, niveles, caudales, perturbaciones y errores de las tres celdas.")
 
-    st.subheader("Indicadores de desempeño")
-    metric_tables = [_metrics_table(with_ff, "PI + feedforward")]
-    if compare:
-        metric_tables.append(_metrics_table(feedback_only, "PI solamente"))
-    metrics = pd.concat(metric_tables, ignore_index=True)
-    st.dataframe(metrics, use_container_width=True, hide_index=True)
-
-    if compare:
-        improvement = 100.0 * (1.0 - with_ff.iae_cm_s / np.maximum(feedback_only.iae_cm_s, 1e-12))
-        st.success(
-            "Reducción estimada del IAE con feedforward: "
-            + ", ".join(f"{CELL_NAMES[i]} {improvement[i]:.1f}%" for i in range(3))
-        )
-
-    with st.expander("Modelo matemático implementado"):
+    with tab_model:
+        st.subheader("Parámetros tomados del artículo")
+        st.dataframe(_article_parameters_table(), use_container_width=True, hide_index=True)
         st.markdown(
             r"""
             **Planta integradora con retardo (Tabla 2):**
 
             \[
-            G_{p,i}(s)=\frac{k'_i e^{-\theta_i s}}{s},
-            \qquad k'_i=-0.001018,\quad \theta=[7,6,3]\ \mathrm{s}
+            G_{p,i}(s)=\frac{k'_i e^{-\theta_i s}}{s}
             \]
 
             **Control PI + feedforward (Ecuación 7):**
@@ -363,22 +460,19 @@ def main() -> None:
             \int_0^t e_i(\tau)d\tau\right)+K_{ff,i}\Delta Q_{d,i}
             \]
 
-            con \(K_c=[-62,-76,-85]\), \(\tau_I=[56,30,44]\) s y
-            \(K_{ff}=[0.8,0.8,1.0]\). La simulación añade el caudal nominal
-            como sesgo del actuador para que el punto inicial sea estacionario.
+            La simulación usa el caudal nominal como sesgo del actuador para que
+            el punto inicial sea estacionario. La perturbación de la celda 1 es
+            externa; las celdas 2 y 3 reciben el caudal de salida de la celda anterior.
             """
         )
+        with st.expander("Alcance y limitaciones"):
+            st.markdown(
+                "La app reproduce la capa de control y el modelo reducido del artículo; "
+                "no reproduce la química de flotación, la espuma, el PLC, la calibración "
+                "de sensores ni los datos experimentales originales."
+            )
 
-    with st.expander("Alcance y limitaciones"):
-        st.markdown(
-            "La app reproduce la capa de control y el modelo reducido del artículo; "
-            "no reproduce la química de flotación, la espuma, el PLC, la calibración "
-            "de sensores ni los datos experimentales originales. Los parámetros de "
-            "las bombas y sensores se pueden sustituir por datos propios si el docente "
-            "los solicita."
-        )
-
-    st.caption("Fuente: Quintanilla et al., MethodsX 10 (2023) 102081, doi:10.1016/j.mex.2023.102081")
+    st.caption("Fuente: Quintanilla et al., MethodsX 10 (2023) 102081 · DOI 10.1016/j.mex.2023.102081")
 
 
 if __name__ == "__main__":
